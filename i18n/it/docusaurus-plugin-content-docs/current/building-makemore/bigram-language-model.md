@@ -190,7 +190,7 @@ plt.axis('off');
 Ci sarà una riga e una colonna che rivelano un problema con i nostri 'caratteri speciali' `<S>` e `<E>`.
 C'è una colonna per istanze come (a, `<S>`) (penultima) e una riga per tuple come (`<E>`, a) (ultima). **Queste sono combinazioni impossibili**.
 
-**Questo distorce qualsiasi statistica su cui ci baseremmo**. È un problema così profondo che dovremmo adattare il nostro modello. Questo viene fatto sostituendo i nostri caratteri speciali `<S>` e `<E>` con un solo carattere speciale e comune: `.`
+> **Questo distorce qualsiasi statistica su cui potremmo basarci**. È un problema così profondo che dovremmo adattare il nostro modello. Sostituiamo i nostri caratteri speciali `<S>` e `<E>` con un solo carattere speciale e comune: `.`
 
 ```python
 N = torch.zeros((27, 27), dtype=torch.int32) # 28x28 -> 27x27
@@ -217,6 +217,392 @@ for i in range(27):
         plt.text(j, i, N[i,j].item(), ha="center", va="top", color="gray")
 plt.axis('off');
 ```
+
+![An image from the static](/img/building-makemore/img_2.png)
+
+Questo risolve il problema della riga-colonna di prima, dato che `.` infatti ora può comparire davanti o dopo le lettere.<br/>
+Nota che anche `..` è legale, tecnicamente. Potremmo infatti produrre un nome vuoto.
+
+## Building Probability Distributions
+
+Seguiremo le probabilità e inizieremo a campionare il modello, riga per riga come mostrato dalla matrice di correlazione.<br/>
+Quindi, iniziamo con le tuple della riga contenente `('.', 'a')`.
+
+```python
+# Getting the entire zero-th row 
+# (a 1D array of '.' and all letters following)
+print("Raw first row's combination counts:\n", N[0], "\n")
+print(N[0].shape)
+
+# Raw first row's combination counts:
+#  tensor([   0, 4410, 1306, 1542, 1690, 1531,  417,  669,  874,  591, 2422, 2963,
+#         1572, 2538, 1146,  394,  515,   92, 1639, 2055, 1308,   78,  376,  307,
+#          134,  535,  929], dtype=torch.int32) 
+# 
+# torch.Size([27])
+```
+
+Dato che vogliamo campionare, dobbiamo convertire i conteggi grezzi per riga in probabilità.<br/>
+Facciamo questo dividendo ogni cella per la somma delle celle della sua riga. In questo modo, otteniamo una distribuzione di probabilità per questa riga.
+
+```python
+p = N[0].float() # probability vector (np.array of floats)
+p = p / p.sum()  # normalized probability distribution
+
+print("First Row's distribution:\n", p)
+
+# First Row's distribution:
+#  tensor([0.0000, 0.1377, 0.0408, 0.0481, 0.0528, 0.0478, 0.0130, 0.0209, 0.0273,
+#         0.0184, 0.0756, 0.0925, 0.0491, 0.0792, 0.0358, 0.0123, 0.0161, 0.0029,
+#         0.0512, 0.0642, 0.0408, 0.0024, 0.0117, 0.0096, 0.0042, 0.0167, 0.0290])
+```
+
+Code tips
+
+`p = N[0].float():`
+- `N[0]` estrae la prima riga della matrice (indice 0)
+- `.float()` converte da interi a numeri decimali
+- Esempio: se `N[0] = [0, 5, 3, 0, 2, ...] → p = [0.0, 5.0, 3.0, 0.0, 2.0, ...]`
+
+`p = p / p.sum():`
+- `p.sum()` calcola la somma totale della riga (es. 0+5+3+0+2+... = 10)
+- Divide ogni elemento per questa somma
+- Esempio: `[0.0, 5.0, 3.0, 0.0, 2.0, ...] / 10 = [0.0, 0.5, 0.3, 0.0, 0.2, ...]`
+
+Esploriamo il significato di p e vediamo cosa possiamo farci adesso.
+
+```python
+# Sampling from these distributions
+# Torch.multinomial -> "Give me probability, I'll give you integer"
+# We'll use a PyTorch Generator to make things random yet repeatable (deterministic)
+g = torch.Generator().manual_seed(2147483647)
+p = torch.rand(3, generator=g) # Generate three random numbers [0;1]
+p = p / p.sum()  # compact these random numbers into a distribution
+
+# output: [0.6064, 0.3033, 0.0903]
+print(p)
+```
+
+## Sampling from Probability Distributions
+
+Per campionare la distribuzione (p), possiamo usare `torch.multinomial()`<br/>
+Questa funzione prende una distribuzione di probabilità e fornisce un numero di interi campionati con la distribuzione di probabilità data (nel nostro caso [0.6064, 0.3033, 0.0903] = [60%, 30%, 10%]).
+
+```python
+# With probability distribution p, create a list of 20 samples
+# [replacement: true] means drawing an element doesn't invalidate drawing this element again
+torch.multinomial(p, num_samples=20, replacement=True, generator=g)
+
+# We'd expect ~60% of the 20 items to be 0, ~30% to be 1 , ~10% to be 2
+# output: [1, 1, 2, 0, 0, 2, 1, 1, 0, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]
+```
+> Maggiore è la dimensione del campione, più precisamente la distribuzione può essere approssimata/replicata.
+
+Ora usiamo lo stesso generatore e applichiamo la logica di campionamento al nostro array bidimensionale delle occorrenze. (o piuttosto alla sua prima riga)<br/> 
+Prendiamo i conteggi per riga, li comprimiamo in una distribuzione normale ed estraiamo **un** campione da essa.
+
+```python
+p = N[0].float() # probability vector
+p = p / p.sum()  # normalized probability distributions
+# p = [0.0000, 0.1377, 0.0408, 0.0481, 0.0528, 0.0478, 0.0130, 0.0209, 0.0273,
+# 0.0184, 0.0756, 0.0925, 0.0491, 0.0792, 0.0358, 0.0123, 0.0161, 0.0029,
+# 0.0512, 0.0642, 0.0408, 0.0024, 0.0117, 0.0096, 0.0042, 0.0167, 0.0290]
+# Indice 0: . → 0.0000 (0%)
+# Indice 1: a → 0.1377 (13.77%) ← Probabilità più alta
+# ...
+
+g = torch.Generator().manual_seed(2147483647)
+ix = torch.multinomial(p, num_samples=1, replacement=True, generator=g).item()
+
+# This is an index, a number representing a letter by probability
+print(itos[ix]) # Convert index to letter
+
+# j
+```
+
+Code Tips
+
+`torch.multinomial()` <br/>
+La funzione estrae un singolo indice basandosi su queste probabilità:
+- Ha maggiori possibilità di estrarre l'indice 1 (a) perché ha probabilità 13.77%
+- Ha poche possibilità di estrarre l'indice 0 (.) perché ha probabilità 0%
+- Il seed fisso 2147483647 garantisce che l'estrazione sia riproducibile
+
+Abbiamo appena estratto un carattere/token iniziale 'j' per il nostro primo suggerimento per il nome.<br/>
+Con quello, possiamo muoverci attraverso l'array per trovare la riga delle voci con nome di riga ('j', '.') e ripetere il processo di estrazione.<br/>
+**Da ora in poi questo è un ciclo guidato dalle probabilità.**
+
+```python
+g = torch.Generator().manual_seed(2147483647)
+n = 20
+
+for i in range(n):
+    ix = 0   # Start with special ('.', 'letter') token row
+    out = [] # hold the n names to be generated
+    while True:
+        p = N[ix].float() # probability vector
+        p = p / p.sum()   # normalized probability distributions
+        # draw a single sample from this distribution, set this as new row index
+        ix = torch.multinomial(p, num_samples=1, replacement=True, generator=g).item()
+        out.append(itos[ix])
+        # if we find ourselves back in the special ('.', 'letter') row, we're done with this name
+        if ix == 0:
+            break
+    print(''.join(out))
+    
+# junide.
+# janasah.
+# p.
+# cony.
+# a.
+# nn.
+# kohin.
+# tolian.
+# juee.
+# ksahnaauranilevias.
+# dedainrwieta.
+# ssonielylarte.
+# faveumerifontume.
+# phynslenaruani.
+# core.
+# yaenon.
+# ka.
+# jabdinerimikimaynin.
+# anaasn.
+# ssorionsush.
+```
+Et voilà, una lista terribile di nomi.
+
+Anche se sta andando malissimo, sta funzionando ragionevolmente.
+
+**Fixiamo il problema**.<br/>
+Con `p = N[ix].float() # vettore delle probabilità` stiamo sempre recuperando una riga e convertiamo sempre questa riga interamente da `int` a `float`.<br/>
+Inoltre, ad ogni iterazione facciamo anche `p = p / p.sum()`.<br/>
+Per questo sarebbe meglio preparare una matrice dedicata e preprocessata `P`; semplicemente una matrice di probabilità calcolate.<br/>
+Come passo aggiuntivo, usiamo `P` per sommare se stessa per righe. Questo era `p.sum()` per tutte le lettere prima.<br/>
+Costruiamo questa matrice di aggiornamento delle prestazioni `P`:
+
+```python
+P = N.float()
+# P /= P.sum() # This would sum over all elements, row- and column-wise -> wrong
+# This is allowed with PyTorch:
+P /= P.sum(1, keepdims=True) # sum: A 27x1 vector (1 stands for row-wise sum) (27 by 27 divided by 27 by 1 is possible in PyTorch -> broadcasting)
+# For broadcasting to work like here, each dimension must be either equal or 1 (or not existent), which is the case here (dimensions will be aligned from right to left!)
+# Keepdim=True means that the sum vector is 27x1, (the 1 before that stating that the no. of rows is to be kept, but columns are to be summed over per row)
+
+g = torch.Generator().manual_seed(2147483647)
+
+for i in range(20):
+    ix = 0
+    out = [] # Hold multiple names
+    while True:
+        p = P[ix]
+        # draw a single sample from this distribution
+        ix = torch.multinomial(p, num_samples=1, replacement=True, generator=g).item()
+        # If stopping special character is drawn
+        out.append(itos[ix])
+        if ix == 0:
+            break
+    print(''.join(out))
+```
+
+```python
+# Quick sanity check for broadcasting
+# Expected: Every row of P should sum up to 1
+print(P.sum(1)) # 1 stands for row-wise sum
+```
+
+**Code Tips**<br/>
+- `P.sum(1)` calcola la somma lungo la dimensione 1, cioè **somma ogni riga**
+- Il risultato mostra che ogni riga di `P` somma esattamente a `1.0`. Ogni riga rappresenta una distribuzione di probabilità quindi i valori in ogni riga devono avere 1 come somma. Il fatto che tutte le riche abbiano come somma `1.0` conferma che la normalizzazione è avvenuta correttamente
+
+**Broadcasting**:
+  - Il broadcasting è silenzioso: non ti avvisa se stai facendo qualcosa di sbagliato 
+  - Può accettare operazioni non intenzionali: potresti pensare di fare un'operazione, ma PyTorch ne fa un'altra 
+  - Gli errori sono difficili da individuare: il codice funziona, ma i risultati sono sbagliati
+  ```python
+    # Potresti voler fare:
+    a = torch.tensor([[1, 2], [3, 4]])  # shape: (2, 2)
+    b = torch.tensor([1, 2])            # shape: (2,)
+    result = a + b  # Broadcasting: b diventa [[1, 2], [1, 2]]
+    
+    # Ma forse intendevi:
+    b = torch.tensor([[1], [2]])        # shape: (2, 1)  
+    result = a + b  # Broadcasting diverso!
+  ```
+Per saperne di più sul broadcasting: [PyTorch Broadcasting Semantics](https://pytorch.org/docs/stable/notes/broadcasting.html)
+
+## Qualità dei nomi generati
+
+Abbiamo costruito un bigram language model contando le frequenze delle combinazioni di lettere e poi normalizzando e campionando con quella base di probabilità.<br/>
+Abbiamo fatto il train del modello, abbiamo campionato dal modello (in moto iterattivo, carattere per carattere). Ma è ancora scarso nels generare i nomi.<br/>
+**Ma quanto è scarso**? Sappiamo che la conoscenza del modello è rappresentata da `P`, ma come possiamo riassumere la qualità del modello in un valore?
+
+Per prima cosa, guardiamo i bigrams creati dal dataset: Il bigram di `emma` è per esempio: `.e, em, mm, ma, a.`
+
+**Che probabilità assegna il modello ad ognuno di questi biagrams?**
+
+```python
+# Copied from above, but now modified
+for w in words[:1]:
+    chs = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chs, chs[1:]): # Neat way for two char 'sliding-window'
+        ix1 = stoi[ch1]
+        ix2 = stoi[ch2]
+        prob = P[ix1, ix2]
+        print(f'{ch1}{ch2}: {prob:.4f}')
+        
+# Output
+# .e: 0.0478
+# em: 0.0377
+# mm: 0.0253
+# ma: 0.3899
+# a.: 0.1960
+```
+Questo codice fornisce degli output come `ma: 0.3899`<br/>
+Qualsiasi cosa sopra o sotto $\frac{\partial 1}{\partial 27} = 0.0370$ significa che ci distacchiamo dalla media.<br/>
+Abbiamo imparato qualcosa (non è detto che sia costruttivo) sulla bigram statistics.<br/>
+L'abbiamo imparato contando le occorrenze di ogni biagram nel dataset dei nomi e successivamente normalizzando i conteggi in probabilità.<br/>
+
+Ora come possiamo riassumere queste probabilità in un indicatore che misuri la qualità?<br/>
+Soluzione: La funzione (log) di verosomiglianza (log-likelihood), la somma di $log(probability)$ di tutte le singole probabilità dei token (il logaritmo viene applicato per leggibilità)
+
+> **Più alta è la log-likelihood, migliore è il modello, perchè è più capace di predire il carattere successivo in una sequenza del dataset**
+
+```python
+log_likelihood = 0.0
+n = 0 # tuple count
+
+# copied from above, but now modified - Log likelihood over all words
+for w in words:
+    chs = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chs, chs[1:]): # Neat way for two char 'sliding-window'
+        ix1 = stoi[ch1]
+        ix2 = stoi[ch2]
+        prob = P[ix1, ix2]
+        logprob = torch.log(prob)
+        log_likelihood += logprob
+        n += 1
+        # print(f'{ch1}{ch2}: {prob:.4f} {logprob:.4f}')
+
+print(f'{log_likelihood=}') # As this is a tensor and we want to see that too
+nll = -log_likelihood
+print(f'{nll=}')            # Negative log likelihood
+print(f'{nll/n}')           # Average negative log likelihood (this is the loss we want to minimize)
+
+# Output
+# log_likelihood=tensor(-559891.7500)
+# nll=tensor(559891.7500)
+# 2.454094171524048
+```
+
+Abbiamo calcolata la log-likelihood negativa, perchè questo segue la convenzione di impostare l'obiettivo di minimizzare la funzione di perdita. Più bassa la perdita negativa log-likelihood, migliore è il modello.
+> Peggiore/minore è la probabilità, più negativa è la log-likelihood. Questo è il perchè è stata convertita nello spazio positivo. **Più è alta la log-likelihood negativa `nll`, peggiore è il modello**.
+> Spesso questa `nll` successivamente viene normalizzata anche esse, diventando la **log-likelihood (negativa) media**.
+
+Noi abbiamo $2.45$ per il modello. Più è bassa meglio è.<br/>
+Dobbiamo trovare i parametri che riducano questo valore.
+
+**Goal:**<br/>
+Massimizzare la likelihood dei dati trained rispetto ai parametri del modello `P`<br/>
+- Questo equivale a: Massimizzare la log-likelihood (dato che il logaritmo è monotono)
+- Questo equivale a: Minimizzare la log-likelihood negativa
+- Questo equivale a: Minimizzare la media log-likeligood negativa (la misura di qualità, come mostrato in precedenza `2.45`)
+
+I problemi con il nostro modello possono, d'ora in poi, essere visualizzati osservando la nostra funzione di perdita (loss function), vale a dire la log-likelihood negativa.
+
+Uno dei problemi si presenta prontamente qui sotto:
+```python
+log_likelihood = 0.0
+n = 0
+
+# Copied from above, but now modified
+for w in ['andrejq']:
+    chs = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chs, chs[1:]): # Neat way for two char 'sliding-window'
+        ix1 = stoi[ch1]
+        ix2 = stoi[ch2]
+        prob = P[ix1, ix2]
+        logprob = torch.log(prob)
+        log_likelihood += logprob
+        n += 1
+        print(f'{ch1}{ch2}: {prob:.4f} {logprob:.4f}')
+print(f'\n{log_likelihood=}') # As this is a tensor and we want to see that too
+nll = -log_likelihood
+print(f'{nll=}')
+print(f'{nll/n}')
+
+# Output
+# .a: 0.1377 -1.9829
+# an: 0.1605 -1.8296
+# nd: 0.0384 -3.2594
+# dr: 0.0771 -2.5620
+# re: 0.1336 -2.0127
+# ej: 0.0027 -5.9171
+# jq: 0.0000 -inf
+# q.: 0.1029 -2.2736
+# 
+# log_likelihood=tensor(-inf)
+# nll=tensor(inf)
+# inf
+```
+Con il nome `andrejp` abbiamo una media log-likelihood negativa pari a $\infty$. Una perdita infinita, il "worst case" delle performace del modello.<br/>
+Questo perchè il bigram `jq` non è mai sato presente nel nostro training data, il conteggio è 0, la likelihood perciò è $0%$<br/>
+La likelihood che il modello sceglie è $log(0) = -\infty$
+
+## Model Smoothing
+
+**Model Smoothing** risolve questo abbastanza facilmente.<br/>
+Fondamentalmente incrementiamo ogni conteggio che abbiamo di `1` per evitare di avere lo `0`:
+
+```python
+P = (N+1).float() # Adding a lot more means smoothing out distributions more; see NN approach for discussing this
+# This is allowed with PyTorch:
+P /= P.sum(1, keepdims=True) # sum: A 27x1 vector (1 stands for row-wise sum)
+```
+Aggiungiamo `+1` a `N`, in modo da evitare $\infty$ come risultato del $log$ <br/>
+Rieseguendo esattamente lo stesso codice di prima, ora lo smoothing assegna al biagramma `jq` una probabilità (molto piccola).
+> Il modello è stato sorpreso da questo biagramma, ma non è più sopraffatto
+
+```python
+log_likelihood = 0.0
+n = 0
+
+# Copied from above, but now modified
+for w in ['andrejq']:
+    chs = ['.'] + list(w) + ['.']
+    for ch1, ch2 in zip(chs, chs[1:]): # Neat way for two char 'sliding-window'
+        ix1 = stoi[ch1]
+        ix2 = stoi[ch2]
+        prob = P[ix1, ix2]
+        logprob = torch.log(prob)
+        log_likelihood += logprob
+        n += 1
+print(f'{log_likelihood=}') # As this is a tensor and we want to see that too
+nll = -log_likelihoodF
+print(f'{nll=}')
+print(f'{nll/n}')
+
+# Output
+# log_likelihood=tensor(-27.8672)
+# nll=tensor(27.8672)
+# 3.4834020137786865
+```
+**Questo è un modello di stima dei caratteri bigramma abbastanza solido fino a questo punto.**<br/>
+**Abbiamo valutato le prestazioni e rimosso i problemi attraverso lo smoothing.** 
+
+**E' ancora un po' traballante.**
+
+
+
+
+
+
+
+
+
+
+
 
 
 
