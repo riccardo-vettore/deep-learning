@@ -109,6 +109,128 @@ Esempio:
   - 27 = dimensione del vocabolario
 - `plt.imshow(xenc)`: visualizza la matrice come un'immagine, dove ogni riga rappresenta un carattere e le colonne rappresentano il vocabolario.
 
+I caretteri della parola sono mappati in un intero e adesso in un vettore di tipo `float32`.<br/>
+E questo a sua volta significa che puo' essere un input per una Neural Network.
 
+Facciamo un esperimento con i neuroni. Costruiamo un neurone a 27 dimensioni e lo approcciamo con l'input lettera per lettera del nostro primo nome `.emma`.
 
+```python
+W = torch.randn((27,1), generator=g) # the neuron: random column vector of 27 numbers from normal distribution
+a = xenc @ W  # '@' is PyTorch's matrix multiplication operator (5x27 @ 27x1 -> 5x1)
+
+print(a) # this is now a 5x1 vector
+
+# output
+tensor([[ 0.1066],
+        [-1.2464],
+        [-0.6378],
+        [-0.6378],
+        [ 1.8598]])
+```
+`W` è un nurone **singolo**.
+
+**Code Tips**<br/>
+
+`W = torch.randn((27,1), generator=g)`
+- `W`: rappresenta i **pesi** del neurone
+- `torch.randn((27,1))`: crea una matrice 27×1 con numeri casuali da distribuzione normale (media=0, deviazione standard=1)
+- `generator=g`: usa un generatore specifico per riproducibilità (stesso seed = stessi numeri casuali)
+
+`a = xenc @ W`
+- `@`: operatore di moltiplicazione matriciale in PyTorch
+- `xenc`: matrice 5×27 (input one-hot di ".emma")
+- `W`: matrice 27×1 (pesi del neurone)
+
+```text
+xenc (5×27)  @  W (27×1)  =  a (5×1)
+[1,0,0,...,0]   [w₁]        [w₁]     # per '.'
+[0,0,0,1,0,.]   [w₂]        [w₅]     # per 'e'  
+[0,0,...,1,.]   [w₃]    =   [w₁₃]    # per 'm'
+[0,0,...,1,.]   [...]       [w₁₃]    # per 'm'
+[0,1,0,...,0]   [w₂₇]       [w₂]     # per 'a'
+
+Elemento (0,0): riga 0 di xenc x colonna 0 di W
+[1,0,0,...,0] • [w₁, ..., w₂₇] = w₁ x 1 + 0 x w₂ ... + 0 x w₂₇ = w₁
+Elemento (1,0): riga 1 di xenc x colonna 0 di W
+[0,0,0,1,0,.] • [w₁, ..., w₂₇] = w₁ x 0 + 0 x w₂ + ... 1 x w₅ ... + 0 x w₂₇ = w₅
+...
+```
+
+Il vettore mostra l'attivazione del neurone per carattere; in altre parole la sua reazione ai caratteri.
+> Poichè l'input era codifica one-hot, il singolo neurone riceve un "carattere della lunghezza di 27 dimensioni".
+> Per questo esempio lo fa per tutte le lettere contemporaneamente. Per ogni lettera a 27 dimensioni, produce esattamente un'attivazione. Non impara da questo, ma questa è l'idea generale.<br/>
+> L'intuizione chiave è che **siccome una lettera ha 27 dimensioni attraverso la Codifica One-Hot, anche un singolo neurone deve avere 27 dimensioni.**
+
+Questo era solo **un** neurone. Noi vogliamo 27 neuroni.<br/>
+La ragione per "un neurone per ogni possibile carattere" la vedremo successivamente.
+
+```python
+W = torch.randn((27,27), generator=g) # random column matrix of 27x27 numbers (previous was 27x1 for a single neuron)
+a = xenc @ W  # @ is PyTorch's matrix multiplication operator, this is now a 5x27 vector
+
+print(a) # this is now a 5x27 vector
+```
+tensor([[ 0.2603,  0.9090, -1.4458,  1.1072, -0.7175, -0.3867, -1.2542,  1.2068,
+-0.7305, -1.0926,  0.3223,  0.0717, -0.2774,  1.1634, -0.6691,  0.6492,
+-0.8157,  0.6404,  1.0442, -1.1571,  0.5107,  0.7593, -1.6086, -0.1607,
+-0.7226,  0.5205,  0.7270],
+[ 0.9641,  0.0471,  0.3096,  1.2087, -0.9954, -0.4485, -1.2345,  1.1220,
+-0.6738,  0.6365, -0.5964,  1.3058,  0.3857, -0.7510,  0.9278, -1.4849,
+-0.2129, -0.9419,  1.5729,  1.0105, -0.1085,  0.6006, -0.7091,  1.9217,
+-0.1818, -0.0954, -0.9253],
+[-0.4645, -0.5206, -0.5579,  1.1087,  0.4149,  0.9557, -0.1471, -1.2532,
+-1.1850,  2.1940,  0.6698,  0.4829,  2.0022, -0.6284, -0.9379,  1.6772,
+0.0039, -0.1460, -1.2915, -0.0748,  1.3272,  1.6676,  1.3931,  0.6540,
+-0.2245, -1.8563,  0.9609],
+[-0.4645, -0.5206, -0.5579,  1.1087,  0.4149,  0.9557, -0.1471, -1.2532,
+-1.1850,  2.1940,  0.6698,  0.4829,  2.0022, -0.6284, -0.9379,  1.6772,
+0.0039, -0.1460, -1.2915, -0.0748,  1.3272,  1.6676,  1.3931,  0.6540,
+-0.2245, -1.8563,  0.9609],
+[ 0.1114, -0.5977, -0.3977, -1.2801,  0.0924, -0.1463, -0.5254, -1.5195,
+0.3240, -1.5065,  1.2898, -1.5100,  1.0930,  0.0549,  1.3537, -1.0896,
+0.2558,  0.2469,  0.3190, -0.9861, -0.2138, -3.0010,  1.4111,  0.0317,
+-0.5475,  0.8183, -0.8163]])
+
+Questo valuterà in parallelo tutti i $27$ neuroni su tutti gli esempi.<br/>
+L'output è ora una matrice $5 x 27$.<br/>
+**Questo significa**: Per ognuno dei 27 neuroni, otteniamo il tasso di attivazione del neurone su ognuno dei 5 esempi.
+
+```python
+(xenc @ W)[3, 13] # The firing rate of the 14th neuron at the 4th input
+
+# Output
+# tensor(-0.6284)
+```
+
+Ora abbiamo alimentato 5 input a 27 dimensioni in un layer di input di 27 neuroni.<br/>
+**Non aggiungeremo un Bias o altro**. Questo è tutto dal lato della struttura della rete.
+
+## Ripristino delle distribuzioni normali
+Per ogni carattere di input, vogliamo che i neuroni producano 27 numeri.<br/>
+Questi 27 numeri dovrebbero formare una **distribuzione di probabilità normale** che ci dica quanto è probabile ogni possibile carattere successivo.<br/>
+Come abbiamo visto nel modello Bigram, dove avevamo probabilità chiare per ogni transizione carattere → carattere
+
+**Problema**: Al momento non abbiamo questo.<br/>
+Dalla rete neurale otteniamo 27 numeri per carattere, ma sono valori grezzi (raw values). Possono essere positivi, negativi, di qualsiasi grandezza. <br/>
+**Non sono probabilità** (dovrebbero essere tra 0 e 1 e sommati devono valere 1).
+
+Le reti neurali non producono automaticamente distribuzioni di probabilità. L'output grezzo potrebbe essere qualcosa come:
+```python
+[-2.3, 0.7, 15.2, -0.1, 8.9, ...]
+```
+Ma noi abbiamo qualcosa come:
+```python
+[0.05, 0.12, 0.03, 0.45, 0.08, ...] // somma = 1.0
+```
+
+**Soluzione**<br/>
+Nel modello Biagram avevamo una matrice di conteggi diretti:
+```python
+    a  b  c  d
+a [ 5, 2, 0, 1]  // dopo 'a', abbiamo visto: 5 volte 'a', 2 volte 'b', etc.
+b [ 1, 3, 4, 0]
+c [ 0, 1, 2, 6]
+d [ 2, 0, 1, 4]
+```
+Da questi conteggi calcolavamo facilmente la probabilità dividendo il totale.
 
