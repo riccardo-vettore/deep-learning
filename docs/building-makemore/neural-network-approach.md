@@ -234,3 +234,67 @@ d [ 2, 0, 1, 4]
 ```
 Da questi conteggi calcolavamo facilmente la probabilità dividendo il totale.
 
+**Soluzione: Interpretazione come log-counts**<br/>
+L'idea chiave è: interpretiamo questi numeri come **logaritmi** dei conteggi originali.<br/>
+Se la rete producer `[-2.3, 0.7, -∞, 0.0]` <br/>
+Li interpretiamo come:
+- log(conteggio_a) = -2.3
+- log(conteggio_b) = 0.7
+- log(conteggio_c) = -∞
+- log(conteggio_d) = 0.0
+
+**Recuperiamo i "conteggi" con l'esponenziale** <br/>
+Applichiamo $e^x$ per ottenere i conteggi
+- $e^{-2.3} = 0.1$
+- $e^{0.7} = 2$
+- $e^{-∞} = 0$
+- $e^{0.0} = 1.0$
+Risultato: `[0.1, 2.0, 0, 1.0]` sembrano conteggi realistici.<br/>
+Questo è essenzialmente quello che fa la funzione softmax internamente!RetryClaude does not have the ability to run the code it generates yet.
+
+```python
+logits = xenc @ W # logits, different word for log-counts
+
+# These two combined are called Softmax -> Build a probability distribution from logits
+counts = logits.exp() # negative numbers are positive below 1, positive numbers are positive above 1
+# Let's just say the counts variable holds something like 'fake counts', kinda like in the N matrix of bigram, we process them just the same
+probs = counts / counts.sum(1, keepdims=True) # Normal distribution probabilities
+
+print(probs.shape)    # 5x27, as expected
+print(probs[0].sum()) # Will be 1. for any index [0-4]
+```
+
+## Recap
+Dato l'input di esempio `.emma`, la rete neurale elabora un carattere alla volta. Iniziamo con l'input `x = .` e la label `y = e` e cosi via.
+- Otteniamo l'indice di `.` che è `0`
+- Codifichiamo il `.` in one-hot basandoci sull'indice `0` per formare un vettore 27-dimensionale
+- Questo è entrato nella rete neurale come vettore
+- Li ha attivato diversi neuroni 27-dimensionali
+- Le attivazioni per il `.` formano quindi una matrice
+- Poi viene applicata la Softmax:
+  - Le attivazioni/logit vengono elaborate attraverso $e^x$ per portarle nel range corretto $(0, ∞)$
+  - Questi 27 valori logit spostati vengono sostituiti nuovamente calcolando le loro probabilità normali combinate
+
+Pensiamo alla Softmax come una funzione di normalizzazione che prende numeri 'strani' e restituisce una distribuzione normale positiva. Queste probabilità normali devono indicare quale lettere deve sequire, ad esempio l'input `.`.
+
+**La domanda ora è:**<br/>
+Possiamo trovare un set di Weights `W` in modo tale che le probabilità che la rete setta siano buone?
+
+**Le operazione elencate prima/dopo sono differenziabili e quindi backpropagatable**
+
+Per completenza, riscriviamo
+```python
+# FORWARD-PASS:
+xenc = F.one_hot(xs, num_classes=27).float() # one-hot encode the names
+logits = xenc @ W # logits, different word for log-counts
+# Softmax as part of forward pass
+counts = logits.exp() # 'fake counts', kinda like in  the N matrix of bigram
+probs = counts / counts.sum(1, keepdims=True) # Normal distribution probabilities
+
+print(probs.shape)
+
+# Output
+# torch.Size([5, 27])
+```
+
+
